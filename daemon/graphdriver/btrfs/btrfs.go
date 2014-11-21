@@ -13,11 +13,21 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"strings"
 	"syscall"
 	"unsafe"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/daemon/graphdriver"
 	"github.com/docker/docker/pkg/mount"
+	"github.com/docker/docker/pkg/parsers"
+	"github.com/docker/docker/pkg/units"
+)
+
+var (
+	quotaSize		uint64
+	useQuota		bool = false
+	quotaEnabled		bool = false
 )
 
 func init() {
@@ -26,6 +36,26 @@ func init() {
 
 func Init(home string, options []string) (graphdriver.Driver, error) {
 	rootdir := path.Dir(home)
+
+	for _, option := range options {
+		key, val, err := parsers.ParseKeyValueOpt(option)
+		if err != nil {
+			return nil, err
+		}
+		key = strings.ToLower(key)
+		switch key {
+		case "btrfs.quotasize":
+			size, err := units.RAMInBytes(val)
+			if err != nil {
+				return nil, err
+			}
+			quotaSize = uint64(size)
+			useQuota = true
+			log.Infof("btrfs quota enabled: %d", quotaSize)
+		default:
+			return nil, fmt.Errorf("Unknown option %s\n", key)
+		}
+	}
 
 	var buf syscall.Statfs_t
 	if err := syscall.Statfs(rootdir, &buf); err != nil {
@@ -42,6 +72,13 @@ func Init(home string, options []string) (graphdriver.Driver, error) {
 
 	if err := mount.MakePrivate(home); err != nil {
 		return nil, err
+	}
+
+	if useQuota && !quotaEnabled {
+		if err := quotaEnable(rootdir); err != nil {
+			return nil, err
+		}
+		quotaEnabled = true
 	}
 
 	driver := &Driver{
@@ -146,6 +183,65 @@ func subvolSnapshot(src, dest, name string) error {
 	return nil
 }
 
+func quotaEnable(path string) error {
+	log.Infof("enable btrfs quota on: %s", path)
+
+	dir, err := openDir(path)
+	if err != nil {
+		return err
+	}
+	defer closeDir(dir)
+
+	var args C.struct_btrfs_ioctl_quota_ctl_args
+	args.cmd = C.BTRFS_QUOTA_CTL_ENABLE
+
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, getDirFd(dir), C.BTRFS_IOC_QUOTA_CTL,
+		uintptr(unsafe.Pointer(&args)))
+	if errno != 0 {
+		return fmt.Errorf("Failed to enable btrfs quota: %v", errno.Error())
+	}
+	return nil
+}
+
+func subvolQuotaGroupLimit(path string) error {
+	log.Infof("enable btrfs quota group limits on: %s", path)
+	dir, err := openDir(path)
+	if err != nil {
+		return err
+	}
+	defer closeDir(dir)
+
+	var args C.struct_btrfs_ioctl_qgroup_limit_args
+	args.lim.max_referenced = C.__u64(quotaSize)
+
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, getDirFd(dir), C.BTRFS_IOC_QGROUP_LIMIT,
+		uintptr(unsafe.Pointer(&args)))
+	if errno != 0 {
+		return fmt.Errorf("Failed to set btrfs quota limits: %v", errno.Error())
+	}
+	return nil
+}
+
+func quotaRescan(path string) error {
+	log.Infof("rescan for btrfs quota on: %s", path)
+
+	dir, err := openDir(path)
+	if err != nil {
+		return err
+	}
+	defer closeDir(dir)
+
+	var args C.struct_btrfs_ioctl_quota_ctl_args
+	args.cmd = C.BTRFS_IOC_QUOTA_RESCAN
+
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, getDirFd(dir), C.BTRFS_IOC_QUOTA_CTL,
+		uintptr(unsafe.Pointer(&args)))
+	if errno != 0 {
+		return fmt.Errorf("Failed to enable btrfs quota: %v", errno.Error())
+	}
+	return nil
+}
+
 func subvolDelete(path, name string) error {
 	dir, err := openDir(path)
 	if err != nil {
@@ -182,6 +278,14 @@ func (d *Driver) Create(id string, parent string) error {
 	if parent == "" {
 		if err := subvolCreate(subvolumes, id); err != nil {
 			return err
+		}
+		if false && quotaEnabled {
+			if err := subvolQuotaGroupLimit(subvolumes + "/" + id); err != nil {
+				return err
+			}
+			if err := quotaRescan(subvolumes); err != nil {
+				return err
+			}
 		}
 	} else {
 		parentDir, err := d.Get(parent, "")

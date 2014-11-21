@@ -23,6 +23,10 @@ func TestBtrfsCreateSnap(t *testing.T) {
 	graphtest.DriverTestCreateSnap(t, "btrfs")
 }
 
+func TestBtrfsQuotaEnable(t *testing.T) {
+	graphtest.DriverTestQuotaEnable(t, "btrfs")
+}
+
 func TestBtrfsTeardown(t *testing.T) {
 	graphtest.PutDriver(t)
 }
