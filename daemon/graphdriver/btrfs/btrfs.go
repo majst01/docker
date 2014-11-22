@@ -79,6 +79,9 @@ func Init(home string, options []string) (graphdriver.Driver, error) {
 			return nil, err
 		}
 		quotaEnabled = true
+		if err := quotaRescan(rootdir); err != nil {
+			return nil, err
+		}
 	}
 
 	driver := &Driver{
@@ -231,13 +234,12 @@ func quotaRescan(path string) error {
 	}
 	defer closeDir(dir)
 
-	var args C.struct_btrfs_ioctl_quota_ctl_args
-	args.cmd = C.BTRFS_IOC_QUOTA_RESCAN
+	var args C.struct_btrfs_ioctl_quota_rescan_args
 
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, getDirFd(dir), C.BTRFS_IOC_QUOTA_CTL,
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, getDirFd(dir), C.BTRFS_IOC_QUOTA_RESCAN,
 		uintptr(unsafe.Pointer(&args)))
 	if errno != 0 {
-		return fmt.Errorf("Failed to enable btrfs quota: %v", errno.Error())
+		return fmt.Errorf("Failed to rescan btrfs quota: %v", errno.Error())
 	}
 	return nil
 }
@@ -279,11 +281,8 @@ func (d *Driver) Create(id string, parent string) error {
 		if err := subvolCreate(subvolumes, id); err != nil {
 			return err
 		}
-		if false && quotaEnabled {
+		if quotaEnabled {
 			if err := subvolQuotaGroupLimit(subvolumes + "/" + id); err != nil {
-				return err
-			}
-			if err := quotaRescan(subvolumes); err != nil {
 				return err
 			}
 		}
