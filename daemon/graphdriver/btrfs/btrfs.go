@@ -25,9 +25,9 @@ import (
 )
 
 var (
-	quotaSize		uint64
-	useQuota		bool = false
-	quotaEnabled		bool = false
+	quotaSize    uint64
+	useQuota     bool = false
+	quotaEnabled bool = false
 )
 
 func init() {
