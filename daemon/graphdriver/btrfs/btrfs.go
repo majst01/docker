@@ -82,6 +82,10 @@ func Init(home string, options []string) (graphdriver.Driver, error) {
 		if err := quotaRescan(rootdir); err != nil {
 			return nil, err
 		}
+	} else {
+		if err := quotaDisable(rootdir); err != nil {
+			return nil, err
+		}
 	}
 
 	driver := &Driver{
@@ -202,6 +206,26 @@ func quotaEnable(path string) error {
 		uintptr(unsafe.Pointer(&args)))
 	if errno != 0 {
 		return fmt.Errorf("Failed to enable btrfs quota: %v", errno.Error())
+	}
+	return nil
+}
+
+func quotaDisable(path string) error {
+	log.Infof("disable btrfs quota on: %s", path)
+
+	dir, err := openDir(path)
+	if err != nil {
+		return err
+	}
+	defer closeDir(dir)
+
+	var args C.struct_btrfs_ioctl_quota_ctl_args
+	args.cmd = C.BTRFS_QUOTA_CTL_DISABLE
+
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, getDirFd(dir), C.BTRFS_IOC_QUOTA_CTL,
+		uintptr(unsafe.Pointer(&args)))
+	if errno != 0 {
+		return fmt.Errorf("Failed to disable btrfs quota: %v", errno.Error())
 	}
 	return nil
 }
